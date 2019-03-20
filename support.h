@@ -11,6 +11,11 @@ typedef struct {
     struct timeval endTime;
 } Timer;
 
+typedef struct {
+    float lat;
+    float lon;
+} point;
+
 #ifdef __cplusplus
 extern "C" {
 #endif

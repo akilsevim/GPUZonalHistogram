@@ -2,3 +2,6 @@
 main
 .vscode
 *.txt
+*.icloud
+debug
+.DS_Store
