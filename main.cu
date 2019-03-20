@@ -162,9 +162,12 @@ int main(int argc, char* argv[])
             test = fscanf(file, "%f,%f\n", &lat, &lon);
             //printf("\nTEST:%d",test);
             //printf("\nlat:%f, lon:%f", lat, lon);
-            if(test == EOF) {
+            if(test == EOF) {//If we reached EOF
                 end = 1;
                 break;
+            } else if(test != 2) { //If there are not 2 vals matched
+                i--;
+                continue;
             }
             if(lat > lat_max) lat_max = lat;
             if(lon > lon_max) lon_max = lon;
