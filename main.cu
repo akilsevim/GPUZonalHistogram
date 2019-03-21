@@ -55,7 +55,6 @@ int main(int argc, char* argv[])
     }
 
     int histo_size = histo_row_count * histo_col_count;
-
     
     cudaStream_t stream[stream_number];
     for(int i = 0; i < stream_number; i++) {
@@ -100,9 +99,13 @@ int main(int argc, char* argv[])
         cuda_ret = cudaMalloc((void **) &histogram_d[i], sizeof(unsigned int)*histo_size);
         if(cuda_ret != cudaSuccess) FATAL("Histogram %d couldn't be allocated at device:%d",i, cuda_ret);
 
-        cuda_ret = cudaMemset(histogram_d[i], 0, histo_size * sizeof(unsigned int));
+        cuda_ret = cudaMemset(histogram_d[i], 0.0f, histo_size * sizeof(unsigned int));
         if(cuda_ret != cudaSuccess) FATAL("Unable to set device histogram %d", i);
+
+        cudaDeviceSynchronize();
     }
+
+
     
     /*cuda_ret = cudaMallocManaged((void **) &histogram, sizeof(unsigned int)*histo_size);
     if(cuda_ret != cudaSuccess) FATAL("Histogram couldn't be allocated on device: %d", cuda_ret);*/
@@ -114,13 +117,13 @@ int main(int argc, char* argv[])
     //float *lons_d;
     //unsigned int *histo_d;
 
-    int BLOCK_SIZE = 1024;
-    int MAX_GRID_SIZE = 1024;
+    int BLOCK_SIZE = 512;
+    int MAX_GRID_SIZE = 12;
     int GRID_SIZE = ((chunk_size - 1) / BLOCK_SIZE) + 1;
     GRID_SIZE = GRID_SIZE > MAX_GRID_SIZE ? MAX_GRID_SIZE : GRID_SIZE;
 
-    dim3 DimGrid(GRID_SIZE, 1, 1);
-    dim3 DimBlock(BLOCK_SIZE, 1, 1);
+    dim3 DimGrid(1, 1, 1);
+    dim3 DimBlock(1, 1, 1);
     printf("\nLoading file... %s", filename);
     
     file = fopen(filename, "r");
@@ -133,8 +136,8 @@ int main(int argc, char* argv[])
         float lat, lon;
         for(int i = 0; i < 10; i++) {
             
-            test_1 = fscanf(file, "%*s\t%f\t%f\t%*s\n", &lat, &lon);
-            //test_1 = fscanf(file, "%f,%f\n", &lat, &lon);
+            //test_1 = fscanf(file, "%*s\t%f\t%f\t%*s\n", &lat, &lon);
+            test_1 = fscanf(file, "%f,%f\n", &lat, &lon);
             
             printf("\nlat:%f, lon:%f", lat, lon);
         }
@@ -149,18 +152,20 @@ int main(int argc, char* argv[])
     int end = 0;
     int chunk_counter = 0;
     int test = 0;
+
+    unsigned int *histogram_final;
+    histogram_final = (unsigned int*)malloc(histo_size * sizeof(unsigned int));
+    memset(histogram_final, 0.0f, histo_size * sizeof(unsigned int));
     
     while (1) {
         //printf("\n%d",chunk_counter);
-        for(int i = 0; i < stream_number; i++) {
-            memset(points[i], 0.0f, sizeof(float)*chunk_size);
-        }
-
+        
         for(int i = 0; i < stream_number; i++) {
             float lat, lon = lat = 0.0f;
             
             test = fscanf(file, "%f,%f\n", &lat, &lon);
-            //printf("\nTEST:%d",test);
+            //test = fscanf(file, "%*s\t%f\t%f\t%*s\n", &lat, &lon);
+
             //printf("\nlat:%f, lon:%f", lat, lon);
             if(test == EOF) {//If we reached EOF
                 end = 1;
@@ -175,12 +180,24 @@ int main(int argc, char* argv[])
             if(lon < lon_min) lon_min = lon;
             points[i][chunk_counter].lat = lat;
             points[i][chunk_counter].lon = lon;
+            //printf("\nS==>Lat:%f, Lon:%f",points[i][chunk_counter].lat, points[i][chunk_counter].lon);
+
             line_count++;
         }
 
+        //printf("\nlat_max:%f, lon_max:%f, lat_min:%f, lon_min:%f", lat_max, lon_max, lat_min, lon_min);
+
         chunk_counter++;
 
-        if(chunk_counter == chunk_size || end == 1) {
+        if(chunk_counter == chunk_size || (end == 1 && chunk_counter != 1)) {
+
+            /*for(int i = 0; i < stream_number; i++) {
+                printf("Stream 1:");
+                for(int j = 0; j < chunk_size; j++) {
+                    printf("\nS==>Lat:%f, Lon:%f",points[i][j].lat, points[i][j].lon);
+                }
+                
+            }*/
 
             if(lat_max > FLT_MAX) lat_max = FLT_MAX;
             if(lon_max > FLT_MAX) lon_max = FLT_MAX;
@@ -188,12 +205,14 @@ int main(int argc, char* argv[])
             if(lon_min > FLT_MIN) lon_min = FLT_MIN;
 
             for(int i = 0; i < stream_number; i++) {
-
-                cudaMemcpyAsync(points_d[i], points[i]  , chunk_size*sizeof(float), cudaMemcpyHostToDevice, stream[i]);
+                int sent_size = chunk_size;
+                if(line_count%chunk_size != 0) sent_size = line_count%chunk_size;
+                printf("\nSENT SIZE:%d",sent_size);
+                cudaMemcpyAsync(points_d[i], points[i], sent_size*sizeof(point), cudaMemcpyHostToDevice, stream[i]);
                     
             }
             for(int i = 0; i < stream_number; i++) {
-
+                printf("\nKernel Call:%d, LineCounter:%d, Chunk Counter:%d",i,line_count, chunk_counter);
                 histogram_kernel<<<DimGrid, DimBlock, histo_size * sizeof(unsigned int), stream[i]>>>(
                     points_d[i],
                     histogram_d[i],
@@ -204,19 +223,33 @@ int main(int argc, char* argv[])
                     lat_min, 
                     lon_max, 
                     lon_min);
-                    
             }
+
+            
 
             for(int i = 0; i < stream_number; i++) {
 
-                cudaMemcpyAsync(histogram_d[i], histogram[i], histo_size*sizeof(float), cudaMemcpyDeviceToHost, stream[i]);
+                cudaMemcpyAsync(histogram[i], histogram_d[i], histo_size*sizeof(unsigned int), cudaMemcpyDeviceToHost, stream[i]);
                     
             }
-            
+
             for(int i = 0; i < stream_number; i++) {
                 cudaStreamSynchronize(stream[i]);
             }
 
+            for(int i = 0; i < stream_number; i++) {
+                
+                for(int j = 0; j < histo_size; j++) {
+                    printf("\nHisto[%d][%d]:%d",i,j, histogram[i][j]);
+                    histogram_final[j] += histogram[i][j];
+                }
+            }
+
+            for(int i = 0; i < stream_number; i++) {
+                memset(&points[i]->lat, 0.0f, sizeof(float)*chunk_size);
+                memset(&points[i]->lon, 0.0f, sizeof(float)*chunk_size);
+            }
+            
             chunk_counter = 0;
 
         }
@@ -225,17 +258,19 @@ int main(int argc, char* argv[])
         }
         
     }
+
+    /*for(int k = 0; k < histo_col_count; k++) {
+        for(int l = 0; l < histo_row_count; l++) {
+            
+            printf("\n%d\t%d\t%d", k, l, histogram[0][k * histo_col_count + l]);
+        }
+    }*/
     
     //printf("lat_max:%f, lon_max:%f, lat_min:%f, lon_min:%f\n", lat_max, lon_max, lat_min, lon_min);
 
-    unsigned int *histogram_final;
-    histogram_final = (unsigned int*)malloc(histo_size * sizeof(unsigned int));
-    memset(histogram_final, 0, histo_size * sizeof(unsigned int));
-    for(int i = 0; i < stream_number; i++) {
-        for(int j = 0; j < histo_size; j++) {
-            histogram_final[j] += histogram[i][j];
-        }
-    }
+    
+    
+    
 
 
     fclose(file);
@@ -243,8 +278,8 @@ int main(int argc, char* argv[])
     FILE *out_file;
     out_file = fopen(output_file, "w");
 
-    for(int j = 0; j < histo_col_count; j++) {
-        for(int i = 0; i < histo_row_count; i++) {
+    for(int i = 0; i < histo_row_count; i++) {
+        for(int j = 0; j < histo_col_count; j++) {
             fprintf(out_file, "%d\t%d\t%d\n", i, j, histogram_final[i * histo_col_count + j]);
             printf("\n%d\t%d\t%d", i, j, histogram_final[i * histo_col_count + j]);
         }

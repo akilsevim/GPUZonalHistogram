@@ -29,10 +29,14 @@ __global__ void histogram_kernel(
     i = blockDim.x * blockIdx.x + threadIdx.x;
     while(i < chunk_size) 
     {
-        int col = (points[i].lat - lat_min) * histo_col_count / (lat_max - lat_min);
-        int row = (points[i].lon - lon_min) * histo_row_count / (lon_max - lon_min);
-        if(col > histo_col_count) col = histo_col_count - 1;
-        if(row > histo_row_count) row = histo_row_count - 1;
+        int col = ((points[i].lon - lon_min) * histo_col_count / (lon_max - lon_min));
+        //int col = (int) col_f - (col_f % 1);
+        int row = ((points[i].lat - lat_min) * histo_row_count / (lat_max - lat_min));
+        //int row =  (int) row_f - (row_f % 1);
+
+        if(col > (histo_col_count - 1)) col = histo_col_count - 1;
+        if(row > (histo_row_count - 1)) row = histo_row_count - 1;
+        
         atomicAdd(&(histogram_private[row * histo_col_count + col]), 1);
         i += blockDim.x * gridDim.x;
     }
